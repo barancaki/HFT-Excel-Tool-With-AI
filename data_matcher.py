@@ -163,6 +163,27 @@ class DataMatcher:
         print("No matching rows found")
         return pd.DataFrame()
 
+    def _prepare_dataframe_for_excel(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Prepare DataFrame for Excel export."""
+        if df.empty:
+            return pd.DataFrame({'Message': ['No data available']})
+
+        try:
+            # Create a copy to avoid modifying the original
+            df_clean = df.copy()
+
+            # Convert all columns to string type to avoid Excel compatibility issues
+            for col in df_clean.columns:
+                df_clean[col] = df_clean[col].astype(str)
+
+            # Replace NaN, None, and empty strings with a placeholder
+            df_clean = df_clean.replace({np.nan: '', None: '', 'nan': '', 'None': ''})
+
+            return df_clean
+        except Exception as e:
+            print(f"Error preparing DataFrame: {str(e)}")
+            return pd.DataFrame({'Error': [f'Error preparing data: {str(e)}']})
+
     def find_matches(self, file_paths: List[str], target_columns: List[str]) -> str:
         """Find matching data across multiple Excel files for specific columns."""
         if len(file_paths) < 2:
@@ -181,72 +202,81 @@ class DataMatcher:
             prefix='matching_data_'
         ).name
 
-        with pd.ExcelWriter(result_file, engine='openpyxl') as writer:
-            summary_data = []
-            
-            # Compare each pair of files
-            for i, file1 in enumerate(file_paths):
-                for j, file2 in enumerate(file_paths[i+1:], i+1):
-                    try:
-                        print(f"\nComparing {os.path.basename(file1)} with {os.path.basename(file2)}")
-                        
-                        # Read files
-                        df1 = self._read_excel_file(file1)
-                        df2 = self._read_excel_file(file2)
-                        
-                        print(f"File 1 columns: {', '.join(df1.columns)}")
-                        print(f"File 2 columns: {', '.join(df2.columns)}")
-                        
-                        # Find matching columns from target columns
-                        matching_columns = self._find_matching_columns(df1, df2, target_columns)
-                        
-                        if matching_columns:
-                            print(f"\nFound {len(matching_columns)} matching column pairs:")
-                            for col1, col2 in matching_columns:
-                                print(f"- '{col1}' matches '{col2}'")
+        try:
+            # Create Excel writer with xlsxwriter engine
+            with pd.ExcelWriter(result_file, engine='xlsxwriter') as writer:
+                summary_data = []
+                
+                # Compare each pair of files
+                for i, file1 in enumerate(file_paths):
+                    for j, file2 in enumerate(file_paths[i+1:], i+1):
+                        try:
+                            print(f"\nComparing {os.path.basename(file1)} with {os.path.basename(file2)}")
                             
-                            # Find matching rows
-                            matches = self._find_matching_rows(df1, df2, matching_columns)
+                            # Read files
+                            df1 = self._read_excel_file(file1)
+                            df2 = self._read_excel_file(file2)
                             
-                            if not matches.empty:
-                                # Create sheet name
-                                sheet_name = f"Matches_{i+1}_{j+1}"
+                            print(f"File 1 columns: {', '.join(df1.columns)}")
+                            print(f"File 2 columns: {', '.join(df2.columns)}")
+                            
+                            # Find matching columns from target columns
+                            matching_columns = self._find_matching_columns(df1, df2, target_columns)
+                            
+                            if matching_columns:
+                                print(f"\nFound {len(matching_columns)} matching column pairs:")
+                                for col1, col2 in matching_columns:
+                                    print(f"- '{col1}' matches '{col2}'")
                                 
-                                # Write matches to sheet
-                                matches.to_excel(writer, sheet_name=sheet_name, index=False)
+                                # Find matching rows
+                                matches = self._find_matching_rows(df1, df2, matching_columns)
                                 
-                                # Add to summary
-                                summary_data.append({
-                                    'File 1': os.path.basename(file1),
-                                    'File 2': os.path.basename(file2),
-                                    'Matching Columns': len(matching_columns),
-                                    'Matching Rows': len(matches),
-                                    'Sheet Name': sheet_name
-                                })
-                                
-                                print(f"Found {len(matches)} matching rows")
+                                if not matches.empty:
+                                    # Create sheet name
+                                    sheet_name = f"Matches_{i+1}_{j+1}"
+                                    
+                                    # Prepare and write matches
+                                    matches_clean = self._prepare_dataframe_for_excel(matches)
+                                    matches_clean.to_excel(writer, sheet_name=sheet_name, index=False)
+                                    
+                                    # Add to summary
+                                    summary_data.append({
+                                        'File 1': os.path.basename(file1),
+                                        'File 2': os.path.basename(file2),
+                                        'Matching Columns': len(matching_columns),
+                                        'Matching Rows': len(matches),
+                                        'Sheet Name': sheet_name
+                                    })
+                                    
+                                    print(f"Found {len(matches)} matching rows")
+                                else:
+                                    print("No matching rows found")
                             else:
-                                print("No matching rows found")
-                        else:
-                            print("No matching columns found")
-                            
-                    except Exception as e:
-                        print(f"Error processing files {file1} and {file2}: {str(e)}")
-                        continue
-                    
-                    # Clear memory
-                    gc.collect()
-            
-            # Write summary sheet
-            if summary_data:
-                pd.DataFrame(summary_data).to_excel(
-                    writer,
-                    sheet_name='Summary',
-                    index=False
-                )
-            else:
-                pd.DataFrame({
-                    'Message': ['No matches found between any files']
-                }).to_excel(writer, sheet_name='Summary', index=False)
+                                print("No matching columns found")
+                                
+                        except Exception as e:
+                            print(f"Error processing files {file1} and {file2}: {str(e)}")
+                            continue
+                        
+                        # Clear memory
+                        gc.collect()
+                
+                # Write summary sheet
+                if summary_data:
+                    summary_df = pd.DataFrame(summary_data)
+                    summary_df = self._prepare_dataframe_for_excel(summary_df)
+                else:
+                    summary_df = pd.DataFrame({'Message': ['No matches found between any files']})
+                
+                summary_df.to_excel(writer, sheet_name='Summary', index=False)
 
-        return result_file 
+            return result_file
+
+        except Exception as e:
+            print(f"Error in Excel writing process: {str(e)}")
+            if os.path.exists(result_file):
+                try:
+                    os.remove(result_file)
+                except:
+                    pass
+            raise Exception(f"Error generating Excel file: {str(e)}") 
